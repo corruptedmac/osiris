@@ -2012,12 +2012,12 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     oiGlobeRef.current?.setColors({ support: palette.oiSupport, oppose: palette.oiOppose, neutral: palette.oiNeutral });
   }, [palette.oiSupport, palette.oiOppose, palette.oiNeutral]);
 
-    /* Cameras are circles and a label, so no image to rebuild — the colour is
-       a paint property on each. */
+    /* Cameras are pins and a label: the pin tint is the symbol layer's
+       icon-color paint property; the label takes text-color. */
     useEffect(() => {
       if (!mapReady || !mapRef.current) return;
       const map = mapRef.current;
-      if (map.getLayer('cctv-dots')) map.setPaintProperty('cctv-dots', 'circle-color', palette.cctv);
+      if (map.getLayer('cctv-dots')) map.setPaintProperty('cctv-dots', 'icon-color', palette.cctv);
       if (map.getLayer('cctv-label')) map.setPaintProperty('cctv-label', 'text-color', palette.cctv);
     }, [mapReady, palette.cctv]);
 
