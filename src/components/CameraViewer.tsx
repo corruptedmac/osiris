@@ -5,6 +5,8 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { X, ExternalLink, RefreshCw, MapPin, Camera, CameraOff, Maximize2, PlayCircle } from 'lucide-react';
 import Hls from 'hls.js';
 import { isHostedOffPlatform, liveFeedAtSource, localEmbed, needsResolution, offPlatformView } from '@/lib/camera-feed';
+import { decideHlsRecovery, networkRetryDelayMs } from '@/lib/hls-recovery';
+import { freshen } from '@/lib/camera-preview';
 import { clearLook, registerVideo } from '@/lib/vision/store';
 import CameraVision, { VisionReport } from './CameraVision';
 
@@ -37,6 +39,11 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const hlsRef = useRef<Hls | null>(null);
+  // True once an HLS stream has failed past recovery and the viewer has
+  // dropped to the camera's snapshot still (see lib/hls-recovery).
+  const [hlsFallback, setHlsFallback] = useState(false);
+  const hlsCountsRef = useRef({ networkRetries: 0, mediaRecoveries: 0 });
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const externalFeedUrl = camera?.external_url || camera?.feed_url;
   const hostedOffPlatform = isHostedOffPlatform(camera);
@@ -83,6 +90,9 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
   }, [resolveKey]);
 
   const streamType = resolvedEmbed ? 'iframe' : (camera?.stream_type || 'jpg');
+  // What is actually on screen: after an unrecoverable HLS failure with a
+  // still available, that is a snapshot, whatever the camera declares.
+  const displayType = hlsFallback ? 'jpg' : streamType;
   const streamUrl: string | undefined = resolvedEmbed || camera?.stream_url;
   const view = offPlatformView({ hostedOffPlatform, resolving, resolvedEmbed, offline });
   const externalOnly = view !== 'inline';
@@ -92,6 +102,12 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
     setLoading(true);
     setError(false);
     setImageUrl(null);
+    setHlsFallback(false);
+    hlsCountsRef.current = { networkRetries: 0, mediaRecoveries: 0 };
+    if (retryTimerRef.current) {
+      clearTimeout(retryTimerRef.current);
+      retryTimerRef.current = null;
+    }
 
     // Cleanup previous HLS instance
     if (hlsRef.current) {
@@ -105,23 +121,81 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
     }
 
     if (streamType === 'hls' && camera.stream_url) {
+      // Some HLS cameras also publish a still (Louisiana DOTD does, as
+      // feed_url). It is the honest fallback when the stream cannot be
+      // recovered: a labelled snapshot beats a dead player.
+      const snapshotUrl: string | undefined = camera.feed_url || undefined;
+      const enterSnapshotFallback = () => {
+        if (retryTimerRef.current) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = null;
+        }
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+        setHlsFallback(true);
+        setLoading(false);
+        if (snapshotUrl) setImageUrl(freshen(snapshotUrl));
+      };
       if (Hls.isSupported() && videoRef.current) {
-        const hls = new Hls({ enableWorker: false });
+        const hls = new Hls({
+          enableWorker: false,
+          capLevelToPlayerSize: true,
+          // Start on the lowest rung so the first frame arrives fast; ABR
+          // is left on and climbs as bandwidth proves out.
+          startLevel: 0,
+          manifestLoadingMaxRetry: 2,
+          manifestLoadingRetryDelay: 500,
+          manifestLoadingMaxRetryTimeout: 4000,
+          levelLoadingMaxRetry: 3,
+          levelLoadingRetryDelay: 500,
+          levelLoadingMaxRetryTimeout: 8000,
+          fragLoadingMaxRetry: 3,
+          fragLoadingRetryDelay: 500,
+          fragLoadingMaxRetryTimeout: 8000,
+        });
         hlsRef.current = hls;
         hls.loadSource(camera.stream_url);
         hls.attachMedia(videoRef.current);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          // A manifest that loads proves the network path works again.
+          hlsCountsRef.current.networkRetries = 0;
           setLoading(false);
           videoRef.current?.play().catch(() => {});
         });
-        hls.on(Hls.Events.ERROR, (event, data) => {
-          if (data.fatal) setError(true);
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          const action = decideHlsRecovery(
+            { type: data.type, details: data.details, fatal: data.fatal },
+            { ...hlsCountsRef.current, hasSnapshot: Boolean(snapshotUrl) },
+          );
+          if (action === 'retry-load') {
+            hlsCountsRef.current.networkRetries += 1;
+            retryTimerRef.current = setTimeout(() => {
+              retryTimerRef.current = null;
+              try { hls.startLoad(); } catch { /* instance already gone */ }
+            }, networkRetryDelayMs(hlsCountsRef.current.networkRetries));
+          } else if (action === 'recover-media') {
+            hlsCountsRef.current.mediaRecoveries += 1;
+            hls.recoverMediaError();
+          } else if (action === 'fallback-snapshot') {
+            enterSnapshotFallback();
+          } else if (action === 'give-up') {
+            setError(true);
+            setLoading(false);
+          }
         });
       } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
+        // Native HLS (Safari): no hls.js, so no recovery machinery — a
+        // hard error drops to the snapshot if there is one.
         videoRef.current.src = camera.stream_url;
         videoRef.current.addEventListener('loadedmetadata', () => {
           setLoading(false);
           videoRef.current?.play().catch(() => {});
+        });
+        videoRef.current.addEventListener('error', () => {
+          if (snapshotUrl) enterSnapshotFallback();
+          else { setError(true); setLoading(false); }
         });
       }
       return;
@@ -150,7 +224,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
 
   // Auto-refresh for JPGs
   useEffect(() => {
-    if (streamType !== 'jpg' || (!camera?.feed_url && !camera?.stream_url)) return;
+    if (displayType !== 'jpg' || (!camera?.feed_url && !camera?.stream_url)) return;
     const targetUrl = camera.feed_url || camera.stream_url;
     if (!targetUrl) return;
 
@@ -159,16 +233,16 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
       setImageUrl(url);
     }, 5000); // 5s refresh for JPG
     return () => clearInterval(iv);
-  }, [camera, streamType]);
+  }, [camera, displayType]);
 
   // The detector reads a stream camera's frames from the <video> playing it.
   const cameraId: string | undefined = camera?.id;
   useEffect(() => {
-    if (!cameraId || streamType !== 'hls') return;
+    if (!cameraId || streamType !== 'hls' || hlsFallback) return;
     registerVideo(cameraId, videoRef.current);
     return () => registerVideo(cameraId, null);
     // A retry after an error mounts a new <video>: register that one.
-  }, [cameraId, streamType, error, retryCount]);
+  }, [cameraId, streamType, error, retryCount, hlsFallback]);
 
   // A look belongs to the camera on screen: switching cameras or closing the viewer ends it.
   const lookedAt = useRef<string | undefined>(undefined);
@@ -230,7 +304,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
                 
                 {/* Controls */}
                 <div className="flex items-center gap-1 flex-shrink-0 ml-3">
-                  {streamType === 'jpg' && (
+                  {(streamType === 'jpg' || hlsFallback) && (
                     <button 
                       onClick={() => {
                         const targetUrl = camera.feed_url || camera.stream_url;
@@ -317,7 +391,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
                   </button>
                 </div>
               </div>
-            ) : streamType === 'hls' ? (
+            ) : displayType === 'hls' ? (
               <video
                 ref={videoRef}
                 className={`w-full h-full ${fullscreen ? 'object-contain' : 'object-cover'}`}
@@ -367,7 +441,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
               <div className="absolute top-3 left-3 flex items-center gap-2 bg-black/80 border border-[var(--gold-primary)]/50 px-2 py-1 shadow-[0_0_10px_rgba(0,0,0,0.8)]">
                 <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse shadow-[0_0_8px_#ef4444]" />
                 <span className="text-[9px] font-mono text-white tracking-[0.2em]">
-                  {watchLiveUrl ? 'SNAPSHOT' : streamType === 'jpg' ? 'LIVE SAT-LINK' : 'LIVE FEED'}
+                  {hlsFallback ? 'SNAPSHOT · 5s' : watchLiveUrl ? 'SNAPSHOT' : streamType === 'jpg' ? 'SNAPSHOT · 5s' : 'LIVE VIDEO'}
                 </span>
               </div>
             )}
@@ -384,6 +458,14 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
               >
                 <PlayCircle className="w-3 h-3" /> WATCH LIVE
               </a>
+            )}
+
+            {/* The stream could not be recovered: say so where the still
+                is, rather than dressing the still up as live video. */}
+            {hlsFallback && !error && !externalOnly && (
+              <div className="absolute bottom-3 left-3 z-30 bg-black/80 border border-white/20 px-2 py-1">
+                <span className="text-[9px] font-mono text-[var(--text-secondary)] tracking-[0.2em]">LIVE VIDEO UNAVAILABLE — SHOWING SNAPSHOT</span>
+              </div>
             )}
 
             {/* Tactical Crosshairs */}
@@ -405,7 +487,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
                 <div className="flex flex-col">
                   <span className="text-[9px] text-[var(--text-muted)] font-mono tracking-widest">FEED TYPE</span>
                   <span className="text-[9px] text-white font-mono tracking-widest uppercase">
-                    {view === 'offline' ? (gone ? 'WITHDRAWN' : 'OFFLINE') : watchLiveUrl ? 'SNAPSHOT' : externalOnly ? 'EXTERNAL' : resolvedEmbed ? 'YOUTUBE LIVE' : streamType}
+                    {view === 'offline' ? (gone ? 'WITHDRAWN' : 'OFFLINE') : hlsFallback ? 'SNAPSHOT' : watchLiveUrl ? 'SNAPSHOT' : externalOnly ? 'EXTERNAL' : resolvedEmbed ? 'YOUTUBE LIVE' : streamType}
                   </span>
                 </div>
                 <div className="flex flex-col border-l border-white/10 pl-4">

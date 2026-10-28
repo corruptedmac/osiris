@@ -75,3 +75,18 @@ export function refreshInterval(kind: PreviewKind): number {
   if (kind === 'mp4') return 60000;
   return 0;
 }
+
+/**
+ * The badge a tile of this kind may honestly carry.
+ *
+ * A snapshot tile is a still that re-requests on a cadence — calling it
+ * LIVE claims a video stream that does not exist, the same dishonesty the
+ * full viewer was fixed for. An MP4 tile is a short clip on loop, not a
+ * live feed either. Only the continuous streams (HLS, MJPEG) are live
+ * video.
+ */
+export function previewLabel(kind: PreviewKind): string {
+  if (kind === 'jpg') return `SNAPSHOT · ${Math.round(refreshInterval('jpg') / 1000)}s`;
+  if (kind === 'mp4') return 'VIDEO CLIP';
+  return 'LIVE VIDEO';
+}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { previewMedia, refreshInterval, VIDEO_KINDS, type PreviewKind } from './camera-preview';
+import { previewMedia, previewLabel, refreshInterval, VIDEO_KINDS, type PreviewKind } from './camera-preview';
 
 describe('previewMedia', () => {
   it('treats a missing stream_type as a snapshot, like the full viewer', () => {
@@ -62,6 +62,21 @@ describe('refreshInterval', () => {
     // Re-pointing an HLS or MJPEG source tears down a stream that is already live.
     expect(refreshInterval('hls')).toBe(0);
     expect(refreshInterval('mjpeg')).toBe(0);
+  });
+});
+
+describe('previewLabel', () => {
+  it('calls a snapshot a snapshot, with its refresh cadence — never LIVE', () => {
+    expect(previewLabel('jpg')).toBe('SNAPSHOT · 15s');
+  });
+
+  it('calls a looping MP4 a clip, not a live feed', () => {
+    expect(previewLabel('mp4')).toBe('VIDEO CLIP');
+  });
+
+  it('reserves LIVE VIDEO for the continuous streams', () => {
+    expect(previewLabel('hls')).toBe('LIVE VIDEO');
+    expect(previewLabel('mjpeg')).toBe('LIVE VIDEO');
   });
 });
 
