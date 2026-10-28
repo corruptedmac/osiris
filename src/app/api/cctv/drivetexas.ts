@@ -14,8 +14,9 @@ import type { CctvCamera } from './types';
  * SkyVDN playlist in `httpsurl`. This fetcher is the video half of the Texas
  * region; route.ts concatenates the two.
  *
- * The endpoint's rules, reverse-engineered from drivetexas.org (documented
- * in the public turrbo/reverse-engineered-apis TxDOT client):
+ * The endpoint's rules, reverse-engineered from drivetexas.org and PROVED
+ * against the live endpoint (Oct 28, from the site's own production JS
+ * bundle + live probe queries):
  *   • The query is one URL-encoded JSON object:
  *     {"action":"table/query","query":{"sqlselect":[...],"start":n,
  *      "table":"appgeo/cameraPoint","take":500}}.
@@ -24,33 +25,41 @@ import type { CctvCamera } from './types';
  *     expression returns HTTP 500. Pages of 500 are fetched and filtered
  *     client-side, against `data.totals.Records`.
  *   • The response is columnar: data.data is one parallel array per field.
- *   • Coordinates are not a basic field. Point geometry rides in the `line`
- *     field as WKT, so it is requested explicitly and parsed with the same
- *     parseWkt the 511 stack uses.
+ *   • The current cameraPoint schema is NARROW — sqlselect may only name
+ *     columns that exist, or MapLarge's SQL layer returns its generic
+ *     HTTP 500 page. Proved valid: description, name, httpsurl, imageurl,
+ *     XY. (An earlier field list naming jurisdiction/route/active/line
+ *     500'd the whole query — bad columns, not an egress wall.)
+ *   • Point geometry rides in the `XY` column as WKT —
+ *     "POINT (-96.8077 32.8349)" — parsed with the same parseWkt the 511
+ *     stack uses.
+ *   • `httpsurl` is passed through VERBATIM: it may carry a token query
+ *     parameter, so it is never stripped or rebuilt.
  *   • `imageurl` is an internal https://localhost/thumbs/<id>.flv.png
  *     address reachable only inside the TxDOT network, so it is NOT a
  *     snapshot feed a browser could load. It is carried into feed_url only
  *     if a real http(s) host ever shows up in it; until then these records
  *     have no snapshot behind the video.
+ *   • The camera `name` is a device code, TX_<DISTRICT>_<n>
+ *     (TX_DAL_…, TX_FTW_…, TX_ELP_…). With no jurisdiction column in the
+ *     proved schema, district scoping is a prefix match on that code.
  *
- * Wiring scope is the Dallas district. Widening it is a filter change:
- * add the district's label and DriveTexas's own jurisdiction spelling to
- * DRIVETEXAS_JURISDICTIONS below (Fort Worth is 'Ft Worth' upstream).
+ * Wiring scope is the Dallas district. Widening it is a one-line change:
+ * add the district's city label and its device-code prefix to
+ * DRIVETEXAS_PREFIXES below (Fort Worth is 'TX_FTW_').
  */
 
 const MAPLARGE_URL = 'https://dtx-e-cdn.maplarge.com/Api/ProcessDirect';
 const PAGE_SIZE = 500; // the endpoint caps a response at 500 rows
 const MAX_PAGES = 10; // safety bound (~5000 rows) so a bad total can't fan out forever
 
-const CAMERA_FIELDS = [
-  'name', 'description', 'jurisdiction', 'route', 'direction', 'mrm',
-  'active', 'problemstream', 'lastUpdated', 'id', 'imageurl',
-  'httpsurl', 'iosurl', 'line',
-];
+/* Proved cameraPoint columns ONLY — naming a column that does not exist
+   makes the whole query fail with HTTP 500. */
+const CAMERA_FIELDS = ['description', 'name', 'httpsurl', 'imageurl', 'XY'];
 
-/** YOMI city label → the jurisdiction string DriveTexas itself uses. */
-export const DRIVETEXAS_JURISDICTIONS: Record<string, string> = {
-  Dallas: 'Dallas',
+/** YOMI city label → the TX_<DISTRICT>_ device-code prefix that scopes it. */
+export const DRIVETEXAS_PREFIXES: Record<string, string> = {
+  Dallas: 'TX_DAL_',
 };
 
 /** Texas bounding box — the same one texas.ts applies to its inventory. */
@@ -58,16 +67,11 @@ const TX_BOUNDS = { minLat: 25.8, maxLat: 36.6, minLng: -106.7, maxLng: -93.4 };
 
 /** One cameraPoint row after the columnar response is transposed. */
 export interface DriveTexasCameraRow {
-  id?: unknown;
-  name?: unknown;
   description?: unknown;
-  jurisdiction?: unknown;
-  active?: unknown;
-  problemstream?: unknown;
-  imageurl?: unknown;
+  name?: unknown;
   httpsurl?: unknown;
-  iosurl?: unknown;
-  line?: unknown;
+  imageurl?: unknown;
+  XY?: unknown;
 }
 
 /** Transpose MapLarge's columnar data block into row objects. */
@@ -115,32 +119,21 @@ function publicSnapshotUrl(url: unknown): string | undefined {
 }
 
 /** Map one row to a CctvCamera for the given city, or null to skip it. */
-function mapRow(row: DriveTexasCameraRow, city: string): CctvCamera | null {
-  const rawId = typeof row.id === 'number' ? row.id
-    : typeof row.id === 'string' && row.id.trim() ? Number(row.id)
-    : NaN;
-  if (!Number.isFinite(rawId) || rawId <= 0) return null;
-
-  /* Only explicit bad states drop a camera — a missing flag must not erase
-     one that has a playable stream and a position. */
-  if (Number(row.active) === 0) return null;
-  if (Number(row.problemstream) > 0) return null;
-
-  const video = hlsUrl(row.httpsurl) ?? hlsUrl(row.iosurl);
+function mapRow(row: DriveTexasCameraRow, code: string, city: string): CctvCamera | null {
+  const video = hlsUrl(row.httpsurl);
   if (!video) return null; // this source exists to add video; a row without any adds nothing
 
-  const coords = parseWkt(typeof row.line === 'string' ? row.line : null);
+  const coords = parseWkt(typeof row.XY === 'string' ? row.XY : null);
   if (!coords) return null;
   const { lat, lng } = coords;
   if (lat < TX_BOUNDS.minLat || lat > TX_BOUNDS.maxLat) return null;
   if (lng < TX_BOUNDS.minLng || lng > TX_BOUNDS.maxLng) return null;
 
   const snapshot = publicSnapshotUrl(row.imageurl);
-  const name = asTrimmedString(row.description) || asTrimmedString(row.name)
-    || `DriveTexas Camera ${rawId}`;
+  const name = asTrimmedString(row.description) || code;
 
   return {
-    id: `drivetexas-${rawId}`,
+    id: `drivetexas-${code}`,
     lat,
     lng,
     name,
@@ -155,13 +148,13 @@ function mapRow(row: DriveTexasCameraRow, city: string): CctvCamera | null {
 }
 
 /**
- * Map a full ProcessDirect response to cameras in the wired jurisdictions.
+ * Map a full ProcessDirect response to cameras in the scoped districts.
  * Throws on a failed or malformed response, in the style of
  * mapTexasInventory, so the loader treats it as an upstream failure.
  */
 export function mapDriveTexasResponse(
   data: unknown,
-  jurisdictions: Record<string, string> = DRIVETEXAS_JURISDICTIONS,
+  prefixes: Record<string, string> = DRIVETEXAS_PREFIXES,
 ): CctvCamera[] {
   const response = data as { success?: unknown; data?: { data?: unknown } } | null;
   if (!response || response.success !== true) {
@@ -171,14 +164,15 @@ export function mapDriveTexasResponse(
   if (!block || typeof block !== 'object' || Array.isArray(block)) {
     throw new Error('DriveTexas response is missing its data block');
   }
-  const cityByJurisdiction = new Map(
-    Object.entries(jurisdictions).map(([city, jurisdiction]) => [jurisdiction.toLowerCase(), city]),
-  );
+  const scopes = Object.entries(prefixes)
+    .map(([city, prefix]) => ({ city, prefix: prefix.toUpperCase() }));
   const cameras = new Map<string, CctvCamera>();
   for (const row of columnarToRows(block)) {
-    const city = cityByJurisdiction.get(asTrimmedString(row.jurisdiction).toLowerCase());
-    if (!city) continue;
-    const camera = mapRow(row, city);
+    const code = asTrimmedString(row.name);
+    if (!code) continue;
+    const scope = scopes.find(s => code.toUpperCase().startsWith(s.prefix));
+    if (!scope) continue;
+    const camera = mapRow(row, code, scope.city);
     if (camera) cameras.set(camera.id, camera);
   }
   return [...cameras.values()];

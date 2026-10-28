@@ -2,16 +2,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { fetchDriveTexasCameras, mapDriveTexasResponse } from './drivetexas';
 import { clearSourceCache } from '@/lib/sourceCache';
 
-/* Fixture built from the documented ProcessDirect response shape
-   (columnar data block + totals), with synthetic values. */
+/* Fixture built from the PROVED ProcessDirect response shape (Oct 28):
+   columnar data block carrying only the five columns the current
+   cameraPoint schema answers for — description / name / httpsurl /
+   imageurl / XY — plus totals. Values are synthetic. */
 const dallasCam = {
-  id: 101, name: 'TX_DAL_001', description: 'IH35E @ Mockingbird Ln',
-  jurisdiction: 'Dallas', route: 'IH0035E', direction: 'North', mrm: 12.4,
-  active: 1, problemstream: 0, lastUpdated: 1793200000000,
+  description: 'IH35E @ Mockingbird Ln',
+  name: 'TX_DAL_001',
+  httpsurl: 'https://s70.us-east-1.skyvdn.com:443/rtplive/TX_DAL_001/playlist.m3u8?token=abc123',
   imageurl: 'https://localhost/thumbs/TX_DAL_001.flv.png',
-  httpsurl: 'https://s70.us-east-1.skyvdn.com:443/rtplive/TX_DAL_001/playlist.m3u8',
-  iosurl: 'https://s70.us-east-1.skyvdn.com:443/rtplive/TX_DAL_001/playlist.m3u8',
-  line: 'POINT(-96.8077 32.8349)',
+  XY: 'POINT (-96.8077 32.8349)',
 };
 type Row = typeof dallasCam;
 
@@ -35,11 +35,12 @@ describe('DriveTexas MapLarge inventory', () => {
   it('maps a Dallas camera into an HLS record with WKT coordinates', () => {
     const [result] = mapDriveTexasResponse(response([dallasCam]));
     expect(result).toMatchObject({
-      id: 'drivetexas-101', lat: 32.8349, lng: -96.8077,
+      id: 'drivetexas-TX_DAL_001', lat: 32.8349, lng: -96.8077,
       name: 'IH35E @ Mockingbird Ln', city: 'Dallas', country: 'US',
       source: 'TxDOT DriveTexas', stream_type: 'hls',
-      stream_url: dallasCam.httpsurl,
     });
+    /* httpsurl is passed through verbatim — token query included. */
+    expect(result.stream_url).toBe(dallasCam.httpsurl);
     /* The upstream imageurl is a localhost address inside the TxDOT
        network — it must NOT be passed through as a snapshot feed. */
     expect(result.feed_url).toBeUndefined();
@@ -52,18 +53,19 @@ describe('DriveTexas MapLarge inventory', () => {
     expect(result.stream_url).toBe(dallasCam.httpsurl);
   });
 
-  it('deduplicates by id and drops out-of-scope and unusable rows', () => {
+  it('scopes by TX_DAL_ device-code prefix and drops unusable rows', () => {
     const rows: Row[] = [
-      dallasCam, dallasCam,
-      { ...dallasCam, id: 102, jurisdiction: 'Ft Worth' }, // not wired this phase
-      { ...dallasCam, id: 103, active: 0 },
-      { ...dallasCam, id: 104, problemstream: 1 },
-      { ...dallasCam, id: 105, httpsurl: '', iosurl: 'rtsp://s70.us-east-1.skyvdn.com:554/rtplive/TX_DAL_005' },
-      { ...dallasCam, id: 106, line: null as unknown as string },
-      { ...dallasCam, id: 107, line: 'POINT(0 0)' }, // outside the Texas bbox
-      { ...dallasCam, id: null as unknown as number },
+      dallasCam, dallasCam, // duplicate code — dedupes to one
+      { ...dallasCam, name: 'TX_FTW_001' }, // Fort Worth: not wired this phase
+      { ...dallasCam, name: 'TX_ELP_209' }, // El Paso: out of scope
+      { ...dallasCam, name: 'TX_DAL_002', httpsurl: 'https://example.com/not-a-playlist.mp4' },
+      { ...dallasCam, name: 'TX_DAL_003', httpsurl: '' },
+      { ...dallasCam, name: 'TX_DAL_004', XY: 'not-a-point' },
+      { ...dallasCam, name: 'TX_DAL_005', XY: null as unknown as string },
+      { ...dallasCam, name: 'TX_DAL_006', XY: 'POINT (0 0)' }, // outside the Texas bbox
+      { ...dallasCam, name: '' },
     ];
-    expect(mapDriveTexasResponse(response(rows)).map(c => c.id)).toEqual(['drivetexas-101']);
+    expect(mapDriveTexasResponse(response(rows)).map(c => c.id)).toEqual(['drivetexas-TX_DAL_001']);
   });
 
   it('throws on a failed or malformed response', () => {
@@ -72,8 +74,8 @@ describe('DriveTexas MapLarge inventory', () => {
     expect(() => mapDriveTexasResponse(null)).toThrow('DriveTexas query failed');
   });
 
-  it('pages through the full inventory with the documented request shape', async () => {
-    const second = { ...dallasCam, id: 102, description: 'US75 @ Walnut Hill Ln', line: 'POINT(-96.7699 32.8799)' };
+  it('pages through the full inventory with the proved request shape', async () => {
+    const second = { ...dallasCam, name: 'TX_DAL_002', description: 'US75 @ Walnut Hill Ln', XY: 'POINT (-96.7699 32.8799)' };
     const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => {
       const request = JSON.parse(new URL(url).searchParams.get('request')!);
       if (request.query.start === 0) return Response.json(response([dallasCam], 600));
@@ -84,7 +86,7 @@ describe('DriveTexas MapLarge inventory', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
 
     const cameras = await fetchDriveTexasCameras();
-    expect(cameras.map(c => c.id)).toEqual(['drivetexas-101', 'drivetexas-102']);
+    expect(cameras.map(c => c.id)).toEqual(['drivetexas-TX_DAL_001', 'drivetexas-TX_DAL_002']);
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
     const [url, init] = fetchMock.mock.calls[0];
@@ -93,7 +95,8 @@ describe('DriveTexas MapLarge inventory', () => {
     expect(request.action).toBe('table/query');
     expect(request.query.table).toBe('appgeo/cameraPoint');
     expect(request.query.take).toBe(500);
-    expect(request.query.sqlselect).toEqual(expect.arrayContaining(['httpsurl', 'line', 'jurisdiction']));
+    /* Exactly the proved five columns — any extra column 500s upstream. */
+    expect(request.query.sqlselect).toEqual(['description', 'name', 'httpsurl', 'imageurl', 'XY']);
     expect(request.query.where).toBeUndefined(); // server-side filters return HTTP 500 upstream
     expect((init as RequestInit).headers).toMatchObject({
       Origin: 'https://drivetexas.org',
