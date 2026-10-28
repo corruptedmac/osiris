@@ -37,6 +37,11 @@ describe('map runtime assets', () => {
   it('still counts page views', () => {
     expect(matches('/')).toBe(true);
     expect(matches('/merch')).toBe(true);
-    expect(matches('/api/cctv')).toBe(false);
+    /* hinoki/build-out: '/api/:path*' is a second matcher entry so the access
+       gate can run for API routes; the middleware passes API requests
+       through without analytics, so page-view counting is unchanged. The
+       naive RegExp helper above cannot evaluate ':path*' syntax, so the
+       entry is asserted directly. */
+    expect(config.matcher).toContain('/api/:path*');
   });
 });

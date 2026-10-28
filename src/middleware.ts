@@ -1,9 +1,68 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest, NextFetchEvent } from 'next/server';
 
+/* Access gate (hinoki/build-out): HTTP Basic Auth in front of the whole app
+   when OSIRIS_GATE_USER and OSIRIS_GATE_PASSWORD are set in the environment
+   (the Railway deployment sets them; RALPH chooses the values at deploy time
+   — no credential ever lives in this repo). When either variable is unset
+   (local development), the gate is off and behavior is upstream's.
+   /api/health is exempt so Railway healthchecks and uptime probes pass
+   without credentials. Static build assets (_next/static, vendor files) are
+   outside the matcher below: they are content-hashed chunks that carry no
+   feed data, while every page and API route — the surfaces that do — is
+   gated. */
+function timingSafeEqual(a: string, b: string): boolean {
+  const enc = new TextEncoder();
+  const ab = enc.encode(a);
+  const bb = enc.encode(b);
+  let diff = ab.length ^ bb.length;
+  const len = Math.max(ab.length, bb.length);
+  for (let i = 0; i < len; i++) {
+    diff |= (ab[i % ab.length] ?? 0) ^ (bb[i % bb.length] ?? 0);
+  }
+  return diff === 0;
+}
+
+function gateCheck(request: NextRequest): NextResponse | null {
+  const user = process.env.OSIRIS_GATE_USER;
+  const pass = process.env.OSIRIS_GATE_PASSWORD;
+  if (!user || !pass) return null; // gate not configured — local dev
+  if (request.nextUrl.pathname === '/api/health') return null; // healthchecks stay open
+
+  const header = request.headers.get('authorization') || '';
+  const [scheme, encoded] = header.split(' ');
+  if (scheme === 'Basic' && encoded) {
+    try {
+      const decoded = atob(encoded);
+      const sep = decoded.indexOf(':');
+      if (sep >= 0) {
+        const okUser = timingSafeEqual(decoded.slice(0, sep), user);
+        const okPass = timingSafeEqual(decoded.slice(sep + 1), pass);
+        if (okUser && okPass) return null;
+      }
+    } catch {
+      /* malformed credentials fall through to the 401 */
+    }
+  }
+  return new NextResponse('Authentication required', {
+    status: 401,
+    headers: { 'WWW-Authenticate': 'Basic realm="OSIRIS", charset="UTF-8"' },
+  });
+}
+
 export function middleware(request: NextRequest, event: NextFetchEvent) {
   const url = request.nextUrl.pathname;
-  
+
+  const denied = gateCheck(request);
+  if (denied) return denied;
+
+  /* API routes are admitted by the second matcher entry for the gate only.
+     Analytics never fires for them (that was the original matcher's intent),
+     so pass them straight through once the gate is satisfied. */
+  if (url.startsWith('/api/')) {
+    return NextResponse.next();
+  }
+
   const ip = request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for') || '127.0.0.1';
   const userAgent = request.headers.get('user-agent') || 'Unknown OSIRIS Client';
   
@@ -55,5 +114,10 @@ export function middleware(request: NextRequest, event: NextFetchEvent) {
 export const config = {
   matcher: [
     '/((?!api|_next/static|_next/image|vendor|favicon.ico|sitemap.xml|robots.txt|.*\\.(?:svg|png|jpg|jpeg|gif|webp|mjs|js|css|json|pbf|mvt|woff|woff2|ico|txt)$).*)',
+    /* hinoki/build-out: API routes are matched so the access gate above can
+       run for them; the middleware function passes them through without
+       analytics once the gate is satisfied. /api/health is exempted inside
+       the gate itself. */
+    '/api/:path*',
   ],
 }
