@@ -2,7 +2,7 @@
 
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Maximize2 } from 'lucide-react';
-import { freshen, previewMedia, refreshInterval, VIDEO_KINDS, type PreviewKind } from '@/lib/camera-preview';
+import { freshen, previewLabel, previewMedia, refreshInterval, VIDEO_KINDS, type PreviewKind } from '@/lib/camera-preview';
 import { layoutTile, tileHeight, tilesOverlap, type TileGeometry } from '@/lib/map-tile-layout';
 import type { Map as MlMap } from 'maplibre-gl';
 
@@ -243,8 +243,10 @@ function Tile({ cam: camera, onOpen }: { cam: PreviewCamera; onOpen: (cam: Previ
         ))}
 
         <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 bg-black/70 px-1 py-[1px]">
-          <span className="h-1 w-1 rounded-full bg-[var(--alert-red)] animate-pulse" />
-          <span className="font-mono text-[7px] tracking-[0.18em] text-white/75">LIVE</span>
+          {(camera.media.kind === 'hls' || camera.media.kind === 'mjpeg') && (
+            <span className="h-1 w-1 rounded-full bg-[var(--alert-red)] animate-pulse" />
+          )}
+          <span className="font-mono text-[7px] tracking-[0.18em] text-white/75">{previewLabel(camera.media.kind)}</span>
         </div>
 
         {/* Hover only: the tile is already a button, this says what it opens. */}

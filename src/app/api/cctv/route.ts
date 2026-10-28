@@ -46,6 +46,7 @@ import { fetchGeorgiaCameras } from './georgia';
 import { fetchNorthCarolinaCameras } from './northcarolina';
 import { fetchArizonaCameras } from './arizona';
 import { fetchTexasCameras } from './texas';
+import { fetchDriveTexasCameras } from './drivetexas';
 import { fetchEastAsiaCameras, fetchSeAsiaCameras, fetchWestAsiaCameras } from './opencctv';
 import {
   fetchLatamLiveCameras,
@@ -478,7 +479,11 @@ const RAW_REGION_FETCHERS: Record<string, RegionFetcher> = {
   'georgia': fetchGeorgiaCameras,
   'northcarolina': fetchNorthCarolinaCameras,
   'arizona': fetchArizonaCameras,
-  'texas': fetchTexasCameras,
+  /* Texas is two inventories: its.txdot.gov knows the cameras but carries
+     no video field, DriveTexas (MapLarge) holds the HLS streams. Neither
+     replaces the other, so the region is the concatenation — the same
+     composition as us-west. */
+  'texas': async () => { const [t, d] = await Promise.all([fetchTexasCameras(), fetchDriveTexasCameras()]); return [...t, ...d]; },
   'eastasia': fetchEastAsiaCameras,
   'seasia': fetchSeAsiaCameras,
   'westasia': fetchWestAsiaCameras,
