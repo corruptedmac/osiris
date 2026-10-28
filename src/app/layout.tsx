@@ -2,13 +2,13 @@ import type { Metadata, Viewport } from "next";
 import ErrorBoundary from '@/components/ErrorBoundary';
 import "./globals.css";
 
-const SITE_URL = "https://osirisai.live";
-const SITE_NAME = "OSIRIS";
-const SITE_TITLE = "OSIRIS — Open Source Intelligence Platform | Live Flight Tracking, CCTV, OSINT Tools & More";
-const SITE_DESCRIPTION = "The open-source Palantir alternative. Track live aircraft, satellites, and worldwide CCTV cameras on a 3D globe. Run Nmap scans, DNS lookups, WHOIS queries, SSL cert analysis & threat intelligence — all from your browser. 20+ data sources including live earthquake, wildfire, cyber threat and conflict feeds, plus mapped reference data such as nuclear facilities. Free & open source.";
+const SITE_URL = "https://osiris-production-76d3.up.railway.app";
+const SITE_NAME = "YOMI";
+const SITE_TITLE = "YOMI — Personal Intelligence Platform | Live Flights, CCTV, Satellites & OSINT";
+const SITE_DESCRIPTION = "YOMI — a private personal-intelligence surface. Live aircraft, satellites, worldwide CCTV, earthquakes, wildfires, cyber-threat and conflict feeds on one globe, with OSINT tooling built in. 20+ live data sources, one watch floor.";
 
 export const viewport: Viewport = {
-  themeColor: "#D4AF37",
+  themeColor: "#0A0A0A",
   width: "device-width",
   initialScale: 1,
   maximumScale: 5,
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
   title: {
     default: SITE_TITLE,
-    template: "%s | OSIRIS Intelligence",
+    template: "%s | YOMI Intelligence",
   },
   description: SITE_DESCRIPTION,
   keywords: [
@@ -91,8 +91,8 @@ export const metadata: Metadata = {
     canonical: SITE_URL,
   },
   openGraph: {
-    title: "OSIRIS — The Open-Source Palantir Alternative | Live Flights, CCTV, Satellites & OSINT Tools",
-    description: "Track 10K+ aircraft, 2K satellites & worldwide CCTV on a 3D globe. Run Nmap, DNS, WHOIS & threat intel scans from your browser. 20+ live intelligence feeds. Free. Open source.",
+    title: "YOMI — Personal Intelligence Platform | Live Flights, CCTV, Satellites & OSINT",
+    description: "Track 10K+ aircraft, 2K satellites & worldwide CCTV on one globe. Nmap, DNS, WHOIS & threat intel tooling built in. 20+ live intelligence feeds.",
     type: "website",
     siteName: SITE_NAME,
     locale: "en_US",
@@ -109,8 +109,8 @@ export const metadata: Metadata = {
   },
   twitter: {
     card: "summary_large_image",
-    title: "🛰️ OSIRIS — Open Source Palantir Alternative | Live Tracking + OSINT Tools",
-    description: "Track 10K+ flights, satellites & CCTV worldwide. Run Nmap, DNS, WHOIS scans from your browser. 20+ live intel feeds. Free & open source.",
+    title: "YOMI — Personal Intelligence Platform | Live Tracking + OSINT Tools",
+    description: "Track 10K+ flights, satellites & CCTV worldwide. Nmap, DNS, WHOIS tooling built in. 20+ live intel feeds.",
     creator: "@simplifaisoul",
     site: "@simplifaisoul",
     images: [`${SITE_URL}/og-image.png`],

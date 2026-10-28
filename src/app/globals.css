@@ -7,25 +7,25 @@
    ═══════════════════════════════════════════════════════════════ */
 
 :root {
-  --gold-rgb: 212, 175, 55;
-  --cyan-rgb: 0, 229, 255;
+  --gold-rgb: 201, 162, 39;
+  --cyan-rgb: 52, 152, 219;
   /* ── Core Palette ── */
-  --bg-void: #04040A;
-  --bg-primary: #06060C;
-  --bg-secondary: #0C0E1A;
-  --bg-tertiary: #121628;
-  --bg-panel: rgba(8, 10, 20, 0.88);
-  --bg-panel-solid: #0C0E1A;
+  --bg-void: #0A0A0A;
+  --bg-primary: #0A0A0A;
+  --bg-secondary: #141414;
+  --bg-tertiary: #1A1A1A;
+  --bg-panel: rgba(10, 10, 10, 0.88);
+  --bg-panel-solid: #141414;
 
   /* ── Gold Accent (Eye of Horus) ── */
-  --gold-primary: #D4AF37;
-  --gold-light: #F0D060;
+  --gold-primary: #C9A227;
+  --gold-light: #E3C565;
   --gold-dim: #8B7325;
   --gold-glow: rgba(var(--gold-rgb), 0.3);
 
   /* ── Cyan Intel Stream ── */
-  --cyan-primary: #00E5FF;
-  --cyan-dim: #006B7A;
+  --cyan-primary: #3498DB;
+  --cyan-dim: #1D5C8A;
   --cyan-glow: rgba(var(--cyan-rgb), 0.15);
 
   /* ── Alert Colors ── */
@@ -58,8 +58,8 @@
   --map-oi-neutral: #8c7cff;
 
   /* ── Borders ── */
-  --border-primary: rgba(var(--gold-rgb), 0.15);
-  --border-secondary: rgba(var(--gold-rgb), 0.08);
+  --border-primary: rgba(255, 255, 255, 0.14);
+  --border-secondary: rgba(255, 255, 255, 0.07);
   --border-active: rgba(var(--gold-rgb), 0.4);
   --border-cyan: rgba(var(--cyan-rgb), 0.2);
 
@@ -67,9 +67,9 @@
   --text-primary: #E8E6E0;
   --text-secondary: #9B978E;
   --text-muted: #5C5A54;
-  --text-heading: #F5F0E0;
-  --text-gold: #D4AF37;
-  --text-cyan: #00E5FF;
+  --text-heading: #F5F2EA;
+  --text-gold: #C9A227;
+  --text-cyan: #3498DB;
 
   /* ── Scrollbar ── */
   --scrollbar-thumb: rgba(var(--gold-rgb), 0.2);

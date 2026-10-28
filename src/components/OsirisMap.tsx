@@ -303,6 +303,31 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
     map.addImage(id, { width: size, height: size, data: new Uint8Array(ctx.getImageData(0, 0, size, size).data) });
   }, []);
 
+  /* YOMI pin — one teardrop glyph for every point feed, registered as an SDF
+     image so each layer keeps its own colour expression as icon-color. The
+     punched eye lets the basemap show through the head of the pin. */
+  const createPin = useCallback((map: maplibregl.Map, id: string) => {
+    if (map.hasImage(id)) return;
+    const w = 48, h = 56;
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#FFFFFF';
+    ctx.beginPath();
+    ctx.moveTo(w / 2, h - 2);
+    ctx.bezierCurveTo(w / 2 - 4, h * 0.66, 3, h * 0.52, 3, h * 0.32);
+    ctx.arc(w / 2, h * 0.32, w / 2 - 4, Math.PI, 0);
+    ctx.bezierCurveTo(w - 3, h * 0.52, w / 2 + 4, h * 0.66, w / 2, h - 2);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalCompositeOperation = 'destination-out';
+    ctx.beginPath();
+    ctx.arc(w / 2, h * 0.32, 7, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalCompositeOperation = 'source-over';
+    map.addImage(id, { width: w, height: h, data: new Uint8Array(ctx.getImageData(0, 0, w, h).data) }, { sdf: true });
+  }, []);
+
   useEffect(() => {
     if (!mapRef.current) return;
     const map = mapRef.current;
@@ -454,6 +479,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       createDot(map, 'dot-green', isGhost ? phantomPurple : '#26A69A', 10);
       createDot(map, 'dot-fire', isGhost ? phantomPurple : '#E65100', 10);
       createDot(map, 'dot-cctv', cameraColor, 10);
+      createPin(map, 'yomi-pin');
 
       const sources = ['flights','military','jets','private-fl','satellites','earthquakes','gdelt','day-night','cctv','fires','weather','infrastructure','maritime','maritime-choke','maritime-ships','live-news','conflict-zones', 'war-alerts-targets', 'war-alerts-lines', 'balloons', 'radiation', 'ip-sweep-devices', 'ip-sweep-pulse', 'ip-sweep-connections', 'scan-targets', 'sdk-entities', 'sdk-links', 'malware-nodes', 'malware-new', 'network-mesh', 'cyber-heads', 'gdelt-events', 'cf-outages', 'cf-attacks', 'alert-pins'];
       sources.forEach(s => map.addSource(s, { type: 'geojson', data: EMPTY_FC }));
@@ -523,10 +549,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-color': '#000000', 'circle-opacity': 0.35, 'circle-blur': 1,
       }});
       // CCTV — main dot
-      map.addLayer({ id: 'cctv-dots', type: 'circle', source: 'cctv', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,5, 10,8, 14,12],
-        'circle-color': cameraColor, 'circle-opacity': 0.9,
-        'circle-stroke-width': 2.5, 'circle-stroke-color': '#000000', 'circle-stroke-opacity': 0.9,
+      map.addLayer({ id: 'cctv-dots', type: 'symbol', source: 'cctv', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.19, 5,0.31, 10,0.5, 14,0.75],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': cameraColor, 'icon-opacity': 0.9,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       // CCTV — labels at zoom 10+
       map.addLayer({ id: 'cctv-label', type: 'symbol', source: 'cctv', minzoom: 10, layout: {
@@ -546,20 +575,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       /* Sized by how many live malicious URLs the host serves. A box running
          forty payloads and one running a single sample were the same dot
          before, and they are not the same thing. */
-      map.addLayer({ id: 'malware-dots', type: 'circle', source: 'malware-nodes', paint: {
-        /* A zoom expression has to be the top-level input to the interpolate,
-           so the activity scaling lives in the output stops rather than
-           multiplying two curves together. sqrt keeps a host serving 80 URLs
-           from dwarfing the map — it reads about three times the single-URL
-           dot, not eighty. */
-        'circle-radius': ['interpolate',['linear'],['zoom'],
-          1,  ['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,1.6, 3,2.4, 9,4],
-          5,  ['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,3.2, 3,4.8, 9,8],
-          10, ['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,4.8, 3,7.2, 9,12],
-        ],
-        'circle-color': '#D32F2F',
-        'circle-opacity': 0.9,
-        'circle-stroke-width': 1, 'circle-stroke-color': '#000000', 'circle-stroke-opacity': 0.8,
+      map.addLayer({ id: 'malware-dots', type: 'symbol', source: 'malware-nodes', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,0.10, 3,0.15, 9,0.25], 5,['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,0.20, 3,0.30, 9,0.50], 10,['interpolate',['linear'],['sqrt',['max',['get','url_count'],1]], 1,0.30, 3,0.45, 9,0.75]],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': '#D32F2F', 'icon-opacity': 0.9,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       /* Arrival beacon — expands and fades over the minute after a detection
          is pushed, then the feature drops out of the source entirely. */
@@ -599,35 +621,42 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
          answers. It records no attacker, no victim and no attack, so there is
          nothing here to draw an arc between: a dot at the hosting country,
          coloured by the reported status, is the whole of what is observed. */
-      map.addLayer({ id: 'cyber-heads', type: 'circle', source: 'cyber-heads', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,2.5, 5,4, 10,6],
-        'circle-color': ['case', ['==', ['get','status'], 'online'], '#FF6D00', '#555555'],
-        'circle-opacity': 0.95,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#333', 'circle-stroke-opacity': 0.9,
+      map.addLayer({ id: 'cyber-heads', type: 'symbol', source: 'cyber-heads', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.16, 5,0.25, 10,0.38],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['case', ['==', ['get','status'], 'online'], '#FF6D00', '#555555'], 'icon-opacity': 0.95,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'cyber-labels', type: 'symbol', source: 'cyber-heads', minzoom: 3, layout: {
         'text-field': ['get','malware'], 'text-size': 9, 'text-font': ['JetBrains Mono Bold', 'Open Sans Bold'],
         'text-offset': [0, 1.5], 'text-max-width': 10, 'text-allow-overlap': false,
       }, paint: { 'text-color': '#333333', 'text-halo-color': '#000', 'text-halo-width': 1.5, 'text-opacity': 0.85 }});
 
-      map.addLayer({ id: 'gdelt-dots', type: 'circle', source: 'gdelt', paint: {
-        'circle-radius': 4, 'circle-color': '#D32F2F', 'circle-opacity': 0.5, 'circle-stroke-width': 1, 'circle-stroke-color': '#D32F2F', 'circle-stroke-opacity': 0.25,
+      map.addLayer({ id: 'gdelt-dots', type: 'symbol', source: 'gdelt', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': 0.28,
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': '#D32F2F', 'icon-opacity': 0.5,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
 
       /* ── GDELT 2.0 Events — coloured by CAMEO QuadClass so cooperation and
          conflict are separable at a glance, sized by article volume. ── */
-      map.addLayer({ id: 'gdelt-events-dots', type: 'circle', source: 'gdelt-events', paint: {
-        'circle-radius': ['interpolate',['linear'],['get','articles'], 1,3, 10,5, 50,8, 200,12],
-        'circle-color': ['match',['get','quad'],
+      map.addLayer({ id: 'gdelt-events-dots', type: 'symbol', source: 'gdelt-events', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['get','articles'], 1,0.19, 10,0.31, 50,0.5, 200,0.75],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match',['get','quad'],
           1,'#00E676',   // verbal cooperation
           2,'#00E5FF',   // material cooperation
           3,'#FF9500',   // verbal conflict
           4,'#FF3D3D',   // material conflict
-          '#9B978E'],
-        'circle-opacity': 0.75,
-        'circle-stroke-width': 1,
-        'circle-stroke-color': '#000000',
-        'circle-stroke-opacity': 0.6,
+          '#9B978E'], 'icon-opacity': 0.75,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
 
       /* ── Cloudflare Radar — internet outages (country-scoped) ── */
@@ -635,12 +664,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,14, 5,26, 10,40],
         'circle-color': '#FFB300', 'circle-opacity': 0.12, 'circle-blur': 0.9,
       }});
-      map.addLayer({ id: 'cf-outage-dots', type: 'circle', source: 'cf-outages', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,6, 10,9],
-        // Resolved outages read cooler than ongoing ones.
-        'circle-color': ['case',['get','ongoing'],'#FFB300','#8B7325'],
-        'circle-opacity': 0.9,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#000000', 'circle-stroke-opacity': 0.7,
+      map.addLayer({ id: 'cf-outage-dots', type: 'symbol', source: 'cf-outages', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.25, 5,0.38, 10,0.56],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['case',['get','ongoing'],'#FFB300','#8B7325'], 'icon-opacity': 0.9,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'cf-outage-label', type: 'symbol', source: 'cf-outages', minzoom: 3, layout: {
         'text-field': ['get','country_name'], 'text-size': 9, 'text-font': ['JetBrains Mono Bold', 'Open Sans Bold'],
@@ -648,10 +678,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }, paint: { 'text-color': '#FFB300', 'text-halo-color': '#000', 'text-halo-width': 1.5, 'text-opacity': 0.85 }});
 
       /* ── Cloudflare Radar — layer-3 attack origin share ── */
-      map.addLayer({ id: 'cf-attack-dots', type: 'circle', source: 'cf-attacks', paint: {
-        'circle-radius': ['interpolate',['linear'],['get','share'], 0,4, 5,9, 20,16, 50,24],
-        'circle-color': '#FF3D3D', 'circle-opacity': 0.35, 'circle-blur': 0.3,
-        'circle-stroke-width': 1, 'circle-stroke-color': '#FF3D3D', 'circle-stroke-opacity': 0.7,
+      map.addLayer({ id: 'cf-attack-dots', type: 'symbol', source: 'cf-attacks', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['get','share'], 0,0.25, 5,0.56, 20,1.0, 50,1.5],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': '#FF3D3D', 'icon-opacity': 0.35,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'cf-attack-label', type: 'symbol', source: 'cf-attacks', minzoom: 2, layout: {
         'text-field': ['concat',['get','country'],' ',['to-string',['get','share']],'%'],
@@ -664,11 +697,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,12, 5,20, 10,30],
         'circle-color': '#7E57C2', 'circle-opacity': 0.08, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'weather-dots', type: 'circle', source: 'weather', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,5, 5,8, 10,14],
-        'circle-color': ['match', ['get','icon'], 'cyclone','#7E57C2', 'volcano','#D32F2F', '#7E57C2'],
-        'circle-opacity': 0.75,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#7E57C2', 'circle-stroke-opacity': 0.35,
+      map.addLayer({ id: 'weather-dots', type: 'symbol', source: 'weather', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.31, 5,0.5, 10,0.88],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match', ['get','icon'], 'cyclone','#7E57C2', 'volcano','#D32F2F', '#7E57C2'], 'icon-opacity': 0.75,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'weather-label', type: 'symbol', source: 'weather', layout: {
         'text-field': ['get','title'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -681,17 +716,19 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-color': ['case', ['in', 'SEISMIC RISK', ['get', 'status']], '#E65100', '#26A69A'],
         'circle-opacity': 0.08, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'infra-dots', type: 'circle', source: 'infrastructure', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,6, 10,10],
-        'circle-color': ['case', 
+      map.addLayer({ id: 'infra-dots', type: 'symbol', source: 'infrastructure', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.25, 5,0.38, 10,0.63],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['case', 
           ['in', 'SEISMIC RISK', ['get', 'status']], '#E65100',
           ['==', ['get','status'], 'Active Conflict Zone'], '#D32F2F', 
           ['in', 'Decommission', ['get', 'status']], '#546E7A', 
           ['==', ['get','status'], 'Under Construction'], '#FFA726', 
           '#26A69A'
-        ],
-        'circle-opacity': 0.75,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': ['case', ['in', 'SEISMIC RISK', ['get', 'status']], '#E65100', '#26A69A'], 'circle-stroke-opacity': 0.35,
+        ], 'icon-opacity': 0.75,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'infra-label', type: 'symbol', source: 'infrastructure', minzoom: 5, layout: {
         'text-field': ['get','name'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -724,11 +761,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-color': ['match', ['get','type'], 'naval','#D32F2F', 'energy','#E65100', '#26C6DA'],
         'circle-opacity': 0.08, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'maritime-dots', type: 'circle', source: 'maritime', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,5, 10,9],
-        'circle-color': ['match', ['get','type'], 'naval','#D32F2F', 'energy','#E65100', '#26C6DA'],
-        'circle-opacity': 0.8,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': ['match', ['get','type'], 'naval','#D32F2F', 'energy','#E65100', '#26C6DA'], 'circle-stroke-opacity': 0.35,
+      map.addLayer({ id: 'maritime-dots', type: 'symbol', source: 'maritime', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.19, 5,0.31, 10,0.56],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match', ['get','type'], 'naval','#D32F2F', 'energy','#E65100', '#26C6DA'], 'icon-opacity': 0.8,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'maritime-label', type: 'symbol', source: 'maritime', minzoom: 4, layout: {
         'text-field': ['get','name'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -740,11 +779,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,10, 5,18, 10,28],
         'circle-color': '#E65100', 'circle-opacity': 0.1, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'choke-dots', type: 'circle', source: 'maritime-choke', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,7, 10,12],
-        'circle-color': ['match', ['get','risk'], 'CRITICAL','#D32F2F', 'HIGH','#E65100', 'ELEVATED','#F9A825', '#26A69A'],
-        'circle-opacity': 0.85,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#E65100', 'circle-stroke-opacity': 0.4,
+      map.addLayer({ id: 'choke-dots', type: 'symbol', source: 'maritime-choke', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.25, 5,0.44, 10,0.75],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match', ['get','risk'], 'CRITICAL','#D32F2F', 'HIGH','#E65100', 'ELEVATED','#F9A825', '#26A69A'], 'icon-opacity': 0.85,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'choke-label', type: 'symbol', source: 'maritime-choke', minzoom: 3, layout: {
         'text-field': ['get','name'], 'text-size': 10, 'text-font': ['Open Sans Bold'],
@@ -756,10 +797,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,8, 5,14, 10,22],
         'circle-color': '#EC407A', 'circle-opacity': 0.08, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'news-dots', type: 'circle', source: 'live-news', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,6, 10,10],
-        'circle-color': '#EC407A', 'circle-opacity': 0.8,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#EC407A', 'circle-stroke-opacity': 0.4,
+      map.addLayer({ id: 'news-dots', type: 'symbol', source: 'live-news', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.25, 5,0.38, 10,0.63],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': '#EC407A', 'icon-opacity': 0.8,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'news-label', type: 'symbol', source: 'live-news', minzoom: 4, layout: {
         'text-field': ['get','name'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -772,13 +816,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,7, 6,14, 10,22],
         'circle-color': alertColor, 'circle-opacity': 0.16, 'circle-blur': 0.8,
       }});
-      map.addLayer({ id: 'alert-pin-dots', type: 'circle', source: 'alert-pins', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3.5, 6,6, 10,8],
-        'circle-color': alertColor,
-        // A region is placed less exactly than a town, so it is drawn as a ring.
-        'circle-opacity': ['case', ['==', ['get','precision'], 'region'], 0.15, 0.95],
-        'circle-stroke-width': 1.5,
-        'circle-stroke-color': ['match', ['get','precision'], 'region', alertColor, '#0A0A0A'] as LayerColor,
+      map.addLayer({ id: 'alert-pin-dots', type: 'symbol', source: 'alert-pins', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.22, 6,0.38, 10,0.5],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': alertColor, 'icon-opacity': ['case', ['==', ['get','precision'], 'region'], 0.15, 0.95],
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       // A report just in, and the pin a popup is open on, each get a ring.
       map.addLayer({ id: 'alert-pin-pulse', type: 'circle', source: 'alert-pins', filter: ['==', ['get','fresh'], true], paint: {
@@ -811,10 +855,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 8,8, 12,16, 16,30],
         'circle-color': ['get', 'color'], 'circle-opacity': 0.15, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'sweep-device-dots', type: 'circle', source: 'ip-sweep-devices', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 8,3, 12,6, 16,10],
-        'circle-color': ['get', 'color'], 'circle-opacity': 0.95,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#FFFFFF', 'circle-stroke-opacity': 0.6,
+      map.addLayer({ id: 'sweep-device-dots', type: 'symbol', source: 'ip-sweep-devices', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 8,0.19, 12,0.38, 16,0.63],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['get', 'color'], 'icon-opacity': 0.95,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'sweep-device-labels', type: 'symbol', source: 'ip-sweep-devices', minzoom: 13, layout: {
         'text-field': ['concat', ['get', 'device_type'], '\n', ['get', 'ip']],
@@ -829,10 +876,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-radius': ['interpolate',['linear'],['zoom'], 1,12, 5,25, 10,40],
         'circle-color': '#D32F2F', 'circle-opacity': 0.15, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'scan-targets-dots', type: 'circle', source: 'scan-targets', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,5, 5,8, 10,12],
-        'circle-color': '#D32F2F', 'circle-opacity': 0.9,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': '#ECEFF1', 'circle-stroke-opacity': 0.7,
+      map.addLayer({ id: 'scan-targets-dots', type: 'symbol', source: 'scan-targets', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.31, 5,0.5, 10,0.75],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': '#D32F2F', 'icon-opacity': 0.9,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'scan-targets-label', type: 'symbol', source: 'scan-targets', layout: {
         'text-field': ['get', 'id'], 'text-size': 11, 'text-font': ['Open Sans Bold'],
@@ -856,11 +906,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       // Route layers are added later (after setMapReady) so they render on top of everything.
 
       // Balloons (moving entities)
-      map.addLayer({ id: 'balloon-dots', type: 'circle', source: 'balloons', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,3, 5,5, 10,7],
-        'circle-color': ['get', 'color'],
-        'circle-opacity': 0.8,
-        'circle-stroke-width': 1, 'circle-stroke-color': '#fff', 'circle-stroke-opacity': 0.5,
+      map.addLayer({ id: 'balloon-dots', type: 'symbol', source: 'balloons', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.19, 5,0.31, 10,0.44],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['get', 'color'], 'icon-opacity': 0.8,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'balloon-label', type: 'symbol', source: 'balloons', minzoom: 4, layout: {
         'text-field': ['get','callsign'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -873,11 +925,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
         'circle-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'],
         'circle-opacity': 0.12, 'circle-blur': 1,
       }});
-      map.addLayer({ id: 'rad-dots', type: 'circle', source: 'radiation', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,4, 5,6, 10,8],
-        'circle-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'],
-        'circle-opacity': 0.85,
-        'circle-stroke-width': 1.5, 'circle-stroke-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'], 'circle-stroke-opacity': 0.35,
+      map.addLayer({ id: 'rad-dots', type: 'symbol', source: 'radiation', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.25, 5,0.38, 10,0.5],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match', ['get','status'], 'DANGER','#D32F2F', 'WARNING','#E65100', '#7E57C2'], 'icon-opacity': 0.85,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'rad-label', type: 'symbol', source: 'radiation', minzoom: 5, layout: {
         'text-field': ['concat', ['to-string', ['get','reading']], ' nSv/h'], 'text-size': 9, 'text-font': ['Open Sans Bold'],
@@ -934,10 +988,13 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
       }});
 
       // Maritime Ships (moving entities) — ocean teal family
-      map.addLayer({ id: 'ship-dots', type: 'circle', source: 'maritime-ships', paint: {
-        'circle-radius': ['interpolate',['linear'],['zoom'], 1,2, 5,4, 10,6],
-        'circle-color': ['match', ['get','type'], 'military','#D32F2F', 'tanker','#E65100', 'cargo','#26C6DA', '#B0BEC5'],
-        'circle-opacity': 0.75,
+      map.addLayer({ id: 'ship-dots', type: 'symbol', source: 'maritime-ships', layout: {
+        'icon-image': 'yomi-pin', 'icon-anchor': 'bottom',
+        'icon-size': ['interpolate',['linear'],['zoom'], 1,0.13, 5,0.25, 10,0.38],
+        'icon-allow-overlap': true, 'icon-ignore-placement': true,
+      }, paint: {
+        'icon-color': ['match', ['get','type'], 'military','#D32F2F', 'tanker','#E65100', 'cargo','#26C6DA', '#B0BEC5'], 'icon-opacity': 0.75,
+        'icon-halo-color': 'rgba(0,0,0,0.6)', 'icon-halo-width': 1.2,
       }});
       map.addLayer({ id: 'ship-label', type: 'symbol', source: 'maritime-ships', minzoom: 5, layout: {
         'text-field': ['get','name'], 'text-size': 9, 'text-font': ['Open Sans Regular'],
@@ -1431,7 +1488,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
           <div><span style="color:#5C5A54;">IN THE NEWS</span><br/><span style="color:#E8E6E0;">${count} headline${count === 1 ? '' : 's'}</span></div>
         </div>
         ${headlineList ? `<div style="padding-top:6px;border-top:1px solid rgba(255,255,255,0.06);margin-bottom:8px;"><div style="font-size:8.5px;letter-spacing:0.14em;color:#5C5A54;">HEADLINES THAT MENTION IT</div>${headlineList}</div>` : ''}
-        <div style="font-size:8.5px;color:#5C5A54;line-height:1.4;margin-bottom:6px;">The zone and its severity come from a list OSIRIS keeps by hand, not from a live measurement.</div>
+        <div style="font-size:8.5px;color:#5C5A54;line-height:1.4;margin-bottom:6px;">The zone and its severity come from a list YOMI keeps by hand, not from a live measurement.</div>
         ${p.sourceUrl ? `<a href="${urlSafe(p.sourceUrl)}" target="_blank" rel="noopener noreferrer" style="${linkStyle}flex:1;text-align:center;color:${color};border:1px solid ${color}40;background:${color}15;display:inline-block;width:100%;box-sizing:border-box;margin-top:4px;">[ OPEN SOURCE ↗ ]</a>` : ''}
       </div>`);
     });
@@ -1464,7 +1521,7 @@ function OsirisMap({ data, activeLayers, onEntityClick, onMouseCoords, onRightCl
             <div><span style="color:#5C5A54;">FROM</span><br/><span style="color:#E8E6E0;">${htmlEsc(p.fromName || 'Origin')}</span></div>
             <div><span style="color:#5C5A54;">TO</span><br/><span style="color:#E8E6E0;">${htmlEsc(p.toName || 'Destination')}</span></div>
             <div><span style="color:#5C5A54;">DOMAIN</span><br/><span style="color:${domainColor};">${p.domain}</span></div>
-            <div><span style="color:#5C5A54;">SOURCE</span><br/><a href="${urlSafe(srcUrl)}" target="_blank" style="color:${domainColor};text-decoration:underline;cursor:pointer;">${htmlEsc(p.source || 'OSIRIS')}</a></div>
+            <div><span style="color:#5C5A54;">SOURCE</span><br/><a href="${urlSafe(srcUrl)}" target="_blank" style="color:${domainColor};text-decoration:underline;cursor:pointer;">${htmlEsc(p.source || 'YOMI')}</a></div>
           </div>
           <a href="${urlSafe(srcUrl)}" target="_blank" style="${linkStyle}color:${domainColor};border:1px solid ${domainColor}40;background:${domainColor}18;display:inline-block;margin-top:4px;">OPEN SOURCE ↗</a>
         </div>`);

@@ -380,9 +380,9 @@ export function AskForm({ ready, providerName, onRun, onKey }: { ready: boolean;
         <label className="px-3 py-2.5 flex items-center gap-3 cursor-pointer">
           <span className="flex-1 min-w-0">
             <span className="block text-[12px] text-[var(--text-heading)]">Live research</span>
-            <span className="block mt-0.5 text-[10.5px] leading-snug text-[var(--text-muted)]">News with links, market prices, prediction markets and the OSIRIS feeds that bear on it</span>
+            <span className="block mt-0.5 text-[10.5px] leading-snug text-[var(--text-muted)]">News with links, market prices, prediction markets and the YOMI feeds that bear on it</span>
           </span>
-          <Switch on={useFeeds} onChange={setUseFeeds} label="Research the question and read the live OSIRIS feeds" />
+          <Switch on={useFeeds} onChange={setUseFeeds} label="Research the question and read the live YOMI feeds" />
         </label>
 
         <div>

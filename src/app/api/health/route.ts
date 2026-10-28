@@ -23,7 +23,7 @@ export async function GET() {
     checks_performed: 'none',
     detail:
       'The application process is up and answering requests. Upstream feed availability is not checked by this endpoint — query the individual routes for that.',
-    platform: 'OSIRIS',
+    platform: 'YOMI',
     version: '1.0.0',
     uptime_seconds: process.uptime ? Math.round(process.uptime()) : null,
     /*

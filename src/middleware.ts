@@ -46,7 +46,7 @@ function gateCheck(request: NextRequest): NextResponse | null {
   }
   return new NextResponse('Authentication required', {
     status: 401,
-    headers: { 'WWW-Authenticate': 'Basic realm="OSIRIS", charset="UTF-8"' },
+    headers: { 'WWW-Authenticate': 'Basic realm="YOMI", charset="UTF-8"' },
   });
 }
 
