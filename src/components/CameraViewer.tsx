@@ -6,9 +6,19 @@ import { X, ExternalLink, RefreshCw, MapPin, Camera, CameraOff, Maximize2, PlayC
 import Hls from 'hls.js';
 import { isHostedOffPlatform, liveFeedAtSource, localEmbed, needsResolution, offPlatformView } from '@/lib/camera-feed';
 import { decideHlsRecovery, networkRetryDelayMs } from '@/lib/hls-recovery';
+import { freshStreamCameraId } from '@/lib/fresh-stream';
 import { freshen } from '@/lib/camera-preview';
 import { clearLook, registerVideo } from '@/lib/vision/store';
 import CameraVision, { VisionReport } from './CameraVision';
+
+/**
+ * How long an HLS camera may take to produce a parsed manifest before the
+ * viewer declares it unavailable. Without a bound, a stream whose manifest
+ * request resolves but never parses — an error page served as a playlist,
+ * a stalled edge — sits on DECRYPTING FEED... for as long as the viewer
+ * stays open, indistinguishable from a camera that is merely slow.
+ */
+const HLS_LOAD_TIMEOUT_MS = 20_000;
 
 interface CameraViewerProps {
   camera: any | null;
@@ -89,6 +99,31 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
     return () => { live = false; };
   }, [resolveKey]);
 
+  /**
+   * A DriveTexas camera's catalogue address is usually already expired
+   * (see lib/fresh-stream), so it resolves a fresh one at open time — and
+   * again on every retry, which is what makes RETRY meaningful for these
+   * cameras. Keyed like the embed resolution above: a late reply names
+   * the camera and the attempt it belongs to and is ignored for any other.
+   */
+  const freshId = freshStreamCameraId(camera);
+  const freshKey = freshId ? `${freshId}#${retryCount}` : null;
+  const [freshStream, setFreshStream] = useState<{ key: string; url: string | null } | null>(null);
+  const freshUrl = freshKey && freshStream?.key === freshKey ? freshStream.url : undefined;
+  const awaitingFresh = Boolean(freshKey) && freshStream?.key !== freshKey;
+
+  useEffect(() => {
+    if (!freshKey || !freshId) return;
+    let live = true;
+    fetch(`/api/cctv/resolve-stream?camera=${encodeURIComponent(freshId)}`)
+      .then(r => r.json())
+      .then(d => { if (live) setFreshStream({ key: freshKey, url: d?.streamable ? d.streamUrl : null }); })
+      // A resolver failure is not a broken camera — the catalogue address
+      // is still attempted; it works whenever it happens to be fresh.
+      .catch(() => { if (live) setFreshStream({ key: freshKey, url: null }); });
+    return () => { live = false; };
+  }, [freshKey, freshId]);
+
   const streamType = resolvedEmbed ? 'iframe' : (camera?.stream_type || 'jpg');
   // What is actually on screen: after an unrecoverable HLS failure with a
   // still available, that is a snapshot, whatever the camera declares.
@@ -121,6 +156,11 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
     }
 
     if (streamType === 'hls' && camera.stream_url) {
+      // A DriveTexas camera waits for its fresh address before loading:
+      // starting the player on the catalogue address would burn the whole
+      // recovery budget on a token that is already dead.
+      if (awaitingFresh) return;
+      const sourceUrl = freshUrl ?? camera.stream_url;
       // Some HLS cameras also publish a still (Louisiana DOTD does, as
       // feed_url). It is the honest fallback when the stream cannot be
       // recovered: a labelled snapshot beats a dead player.
@@ -138,6 +178,18 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
         setLoading(false);
         if (snapshotUrl) setImageUrl(freshen(snapshotUrl));
       };
+      // The manifest either parses in time or the camera is declared
+      // unavailable (or dropped to its snapshot) — see HLS_LOAD_TIMEOUT_MS.
+      let manifestSeen = false;
+      const loadTimer = setTimeout(() => {
+        if (manifestSeen) return;
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+        if (snapshotUrl) enterSnapshotFallback();
+        else { setError(true); setLoading(false); }
+      }, HLS_LOAD_TIMEOUT_MS);
       if (Hls.isSupported() && videoRef.current) {
         const hls = new Hls({
           enableWorker: false,
@@ -156,9 +208,11 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
           fragLoadingMaxRetryTimeout: 8000,
         });
         hlsRef.current = hls;
-        hls.loadSource(camera.stream_url);
+        hls.loadSource(sourceUrl);
         hls.attachMedia(videoRef.current);
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          manifestSeen = true;
+          clearTimeout(loadTimer);
           // A manifest that loads proves the network path works again.
           hlsCountsRef.current.networkRetries = 0;
           setLoading(false);
@@ -179,8 +233,10 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
             hlsCountsRef.current.mediaRecoveries += 1;
             hls.recoverMediaError();
           } else if (action === 'fallback-snapshot') {
+            clearTimeout(loadTimer);
             enterSnapshotFallback();
           } else if (action === 'give-up') {
+            clearTimeout(loadTimer);
             setError(true);
             setLoading(false);
           }
@@ -188,8 +244,10 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
       } else if (videoRef.current?.canPlayType('application/vnd.apple.mpegurl')) {
         // Native HLS (Safari): no hls.js, so no recovery machinery — a
         // hard error drops to the snapshot if there is one.
-        videoRef.current.src = camera.stream_url;
+        videoRef.current.src = sourceUrl;
         videoRef.current.addEventListener('loadedmetadata', () => {
+          manifestSeen = true;
+          clearTimeout(loadTimer);
           setLoading(false);
           videoRef.current?.play().catch(() => {});
         });
@@ -198,7 +256,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
           else { setError(true); setLoading(false); }
         });
       }
-      return;
+      return () => { clearTimeout(loadTimer); };
     }
 
     if (streamType === 'mjpeg' && camera.stream_url) {
@@ -220,7 +278,7 @@ export default function CameraViewer({ camera, onClose, onLocate, besideOi = fal
       setError(true);
       setLoading(false);
     }
-  }, [camera, streamType, streamUrl, externalOnly, retryCount]);
+  }, [camera, streamType, streamUrl, externalOnly, retryCount, freshStream]);
 
   // Auto-refresh for JPGs
   useEffect(() => {

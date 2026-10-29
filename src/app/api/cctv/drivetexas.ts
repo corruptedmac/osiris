@@ -178,11 +178,11 @@ export function mapDriveTexasResponse(
   return [...cameras.values()];
 }
 
-function pageUrl(start: number): string {
+function pageUrl(start: number, fields: readonly string[] = CAMERA_FIELDS): string {
   const request = {
     action: 'table/query',
     query: {
-      sqlselect: CAMERA_FIELDS,
+      sqlselect: fields,
       start,
       table: 'appgeo/cameraPoint',
       take: PAGE_SIZE,
@@ -191,8 +191,8 @@ function pageUrl(start: number): string {
   return `${MAPLARGE_URL}?${new URLSearchParams({ request: JSON.stringify(request) })}`;
 }
 
-async function fetchPage(start: number): Promise<unknown> {
-  const response = await fetch(pageUrl(start), {
+async function fetchPage(start: number, fields?: readonly string[]): Promise<unknown> {
+  const response = await fetch(pageUrl(start, fields), {
     signal: AbortSignal.timeout(15000),
     headers: {
       Accept: 'application/json, text/plain, */*',
@@ -241,3 +241,98 @@ async function loadDriveTexasCameras(): Promise<CctvCamera[]> {
 }
 
 export const fetchDriveTexasCameras = cachedSource('drivetexas', loadDriveTexasCameras);
+
+/* ------------------------------------------------------------------ */
+/* Click-time stream resolution                                        */
+/*
+ * The SkyVDN token in `httpsurl` is minted when MapLarge answers and
+ * expires minutes later — measured Oct 28, 2026: a token seconds old
+ * served a valid playlist, while the token the production catalogue was
+ * holding (minted inside the source cache's 30-minute window) was
+ * already answering HTTP 401. A baked stream_url is therefore dead by
+ * the time a camera is opened, and no amount of player retry revives it.
+ *
+ * So the address is resolved when it is needed, the same doctrine the
+ * embed resolver follows: /api/cctv/resolve-stream asks here for one
+ * device code and gets an address minted moments ago. There is no
+ * per-device query — server-side filters make ProcessDirect answer
+ * HTTP 500 — so a resolution sweeps the table's two stream columns and
+ * keeps the result for a minute: one sweep serves every camera opened
+ * in that minute, and no address it hands out is ever more than a
+ * minute plus a sweep old.
+ */
+const RESOLVE_FIELDS = ['name', 'httpsurl'];
+const STREAM_URL_TTL_MS = 60_000;
+
+let streamUrlCache: { at: number; urls: Map<string, string> } | null = null;
+let streamUrlSweep: Promise<Map<string, string>> | null = null;
+
+/** Collect code → playlist address from one ProcessDirect page. */
+function streamUrlsFromPage(data: unknown, into: Map<string, string>): void {
+  const response = data as { success?: unknown; data?: { data?: unknown } } | null;
+  if (!response || response.success !== true) {
+    throw new Error('DriveTexas query failed');
+  }
+  const block = response.data?.data;
+  if (!block || typeof block !== 'object' || Array.isArray(block)) {
+    throw new Error('DriveTexas response is missing its data block');
+  }
+  for (const row of columnarToRows(block)) {
+    const code = asTrimmedString(row.name).toUpperCase();
+    const url = hlsUrl(row.httpsurl);
+    if (code && url) into.set(code, url);
+  }
+}
+
+/** One full pass over the table's stream columns. */
+async function sweepStreamUrls(): Promise<Map<string, string>> {
+  const urls = new Map<string, string>();
+  const first = await fetchPage(0, RESOLVE_FIELDS);
+  streamUrlsFromPage(first, urls);
+  const starts: number[] = [];
+  for (let s = PAGE_SIZE; s < totalRecords(first) && s < PAGE_SIZE * MAX_PAGES; s += PAGE_SIZE) {
+    starts.push(s);
+  }
+  const results = await Promise.allSettled(starts.map(s => fetchPage(s, RESOLVE_FIELDS)));
+  for (const result of results) {
+    if (result.status !== 'fulfilled') continue;
+    try {
+      streamUrlsFromPage(result.value, urls);
+    } catch {
+      // One malformed page must not discard the pages that parsed.
+    }
+  }
+  return urls;
+}
+
+/**
+ * A stream address for one device code, minted within the last minute —
+ * or null when the table carries no such device. Concurrent callers share
+ * one sweep; a failed sweep rejects (and is not cached), so the caller
+ * can tell an upstream failure from a missing camera.
+ */
+export async function resolveDriveTexasStreamUrl(code: string): Promise<string | null> {
+  const wanted = asTrimmedString(code).toUpperCase();
+  if (!wanted) return null;
+  if (streamUrlCache && Date.now() - streamUrlCache.at < STREAM_URL_TTL_MS) {
+    return streamUrlCache.urls.get(wanted) ?? null;
+  }
+  if (!streamUrlSweep) {
+    streamUrlSweep = sweepStreamUrls()
+      .then(urls => {
+        streamUrlCache = { at: Date.now(), urls };
+        return urls;
+      })
+      .finally(() => {
+        streamUrlSweep = null;
+      });
+  }
+  const urls = await streamUrlSweep;
+  return urls.get(wanted) ?? null;
+}
+
+/** Test hook, in the spirit of clearSourceCache: drop the resolve cache. */
+export function clearDriveTexasStreamUrlCache(): void {
+  streamUrlCache = null;
+  streamUrlSweep = null;
+}

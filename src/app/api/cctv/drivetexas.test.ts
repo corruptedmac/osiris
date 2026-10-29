@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { fetchDriveTexasCameras, mapDriveTexasResponse } from './drivetexas';
+import { clearDriveTexasStreamUrlCache, fetchDriveTexasCameras, mapDriveTexasResponse, resolveDriveTexasStreamUrl } from './drivetexas';
 import { clearSourceCache } from '@/lib/sourceCache';
 
 /* Fixture built from the PROVED ProcessDirect response shape (Oct 28):
@@ -29,7 +29,7 @@ const response = (rows: Row[], total = rows.length) => ({
   data: { data: columnar(rows), totals: { Records: total }, tablename: 'appgeo/cameraPoint/1' },
 });
 
-afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); clearSourceCache(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); clearSourceCache(); clearDriveTexasStreamUrlCache(); });
 
 describe('DriveTexas MapLarge inventory', () => {
   it('maps a Dallas camera into an HLS record with WKT coordinates', () => {
@@ -109,5 +109,60 @@ describe('DriveTexas MapLarge inventory', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     vi.spyOn(console, 'log').mockImplementation(() => {});
     expect(await fetchDriveTexasCameras()).toEqual([]);
+  });
+});
+
+describe('DriveTexas click-time stream resolution', () => {
+  /* The resolve sweep asks for only the two stream columns; the response
+     block is columnar in the same shape as the catalogue query's. */
+  const streamPage = (rows: { name: string; httpsurl: string }[], total = rows.length) => ({
+    success: true,
+    data: {
+      data: { name: rows.map(r => r.name), httpsurl: rows.map(r => r.httpsurl) },
+      totals: { Records: total },
+    },
+  });
+  const fresh = (code: string) =>
+    `https://s70.us-east-1.skyvdn.com/rtplive/${code}/playlist.m3u8?token=<redacted>`;
+
+  it('pages the table and returns the address for the asked device', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      const request = JSON.parse(new URL(url).searchParams.get('request')!);
+      expect(request.query.sqlselect).toEqual(['name', 'httpsurl']);
+      expect(request.query.where).toBeUndefined();
+      if (request.query.start === 0) return Response.json(streamPage([{ name: 'TX_DAL_002', httpsurl: fresh('TX_DAL_002') }], 600));
+      if (request.query.start === 500) return Response.json(streamPage([{ name: 'TX_DAL_001', httpsurl: fresh('TX_DAL_001') }], 600));
+      return new Response('', { status: 503 });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(resolveDriveTexasStreamUrl('TX_DAL_001')).resolves.toBe(fresh('TX_DAL_001'));
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves repeat resolutions from the sweep cache instead of re-asking upstream', async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json(streamPage([{ name: 'TX_DAL_001', httpsurl: fresh('TX_DAL_001') }])));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(resolveDriveTexasStreamUrl('tx_dal_001')).resolves.toBe(fresh('TX_DAL_001'));
+    await expect(resolveDriveTexasStreamUrl('TX_DAL_001')).resolves.toBe(fresh('TX_DAL_001'));
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('answers null for a device the table does not carry', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      Response.json(streamPage([{ name: 'TX_DAL_001', httpsurl: fresh('TX_DAL_001') }]))));
+    await expect(resolveDriveTexasStreamUrl('TX_DAL_999')).resolves.toBeNull();
+    await expect(resolveDriveTexasStreamUrl('')).resolves.toBeNull();
+  });
+
+  it('rejects when the sweep itself fails, so the route can say unreachable', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('', { status: 500 })));
+    await expect(resolveDriveTexasStreamUrl('TX_DAL_001')).rejects.toThrow('DriveTexas: HTTP 500');
+    /* A failed sweep is not cached: the next call asks upstream again. */
+    vi.stubGlobal('fetch', vi.fn(async () =>
+      Response.json(streamPage([{ name: 'TX_DAL_001', httpsurl: fresh('TX_DAL_001') }]))));
+    await expect(resolveDriveTexasStreamUrl('TX_DAL_001')).resolves.toBe(fresh('TX_DAL_001'));
   });
 });

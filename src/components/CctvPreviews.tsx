@@ -3,6 +3,7 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { Maximize2 } from 'lucide-react';
 import { freshen, previewLabel, previewMedia, refreshInterval, VIDEO_KINDS, type PreviewKind } from '@/lib/camera-preview';
+import { freshStreamCameraId } from '@/lib/fresh-stream';
 import { layoutTile, tileHeight, tilesOverlap, type TileGeometry } from '@/lib/map-tile-layout';
 import type { Map as MlMap } from 'maplibre-gl';
 
@@ -188,6 +189,30 @@ function Tile({ cam: camera, onOpen }: { cam: PreviewCamera; onOpen: (cam: Previ
   const [failed, setFailed] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
+  /* A DriveTexas tile's catalogue address is usually already expired (see
+     lib/fresh-stream), so the tile resolves a fresh one before mounting its
+     player — mounting on the dead address would fail the tile out of
+     existence before the fresh address could arrive. While the resolve is
+     outstanding the tile sits on its LINKING face, which is the truth. On
+     failure the catalogue address is attempted anyway, as in the viewer. */
+  const freshId = freshStreamCameraId(camera);
+  const [media, setMedia] = useState(camera.media);
+  const [freshPending, setFreshPending] = useState(Boolean(freshId));
+
+  useEffect(() => {
+    if (!freshId) return;
+    let live = true;
+    fetch(`/api/cctv/resolve-stream?camera=${encodeURIComponent(freshId)}`)
+      .then(r => r.json())
+      .then(d => {
+        if (!live) return;
+        if (d?.streamable && d.streamUrl) setMedia({ kind: 'hls', url: d.streamUrl });
+        setFreshPending(false);
+      })
+      .catch(() => { if (live) setFreshPending(false); });
+    return () => { live = false; };
+  }, [freshId]);
+
   /* No reset needed on the way in: each tile is keyed by camera id, so a slot
      changing hands remounts this component with fresh state. */
   const onReady = useCallback(() => setLoaded(true), []);
@@ -213,9 +238,9 @@ function Tile({ cam: camera, onOpen }: { cam: PreviewCamera; onOpen: (cam: Previ
         }}
       >
         <div className="h-full w-full transition-opacity duration-500" style={{ opacity: loaded ? 1 : 0 }}>
-          {VIDEO_KINDS.has(camera.media.kind)
-            ? <VideoMedia cam={camera} onReady={onReady} onFail={onFail} />
-            : <ImageMedia cam={camera} onReady={onReady} onFail={onFail} />}
+          {!freshPending && (VIDEO_KINDS.has(media.kind)
+            ? <VideoMedia cam={{ ...camera, media }} onReady={onReady} onFail={onFail} />
+            : <ImageMedia cam={{ ...camera, media }} onReady={onReady} onFail={onFail} />)}
         </div>
 
         {/* Two cosmetic passes over the picture: scanlines, for the same CRT
@@ -243,10 +268,10 @@ function Tile({ cam: camera, onOpen }: { cam: PreviewCamera; onOpen: (cam: Previ
         ))}
 
         <div className="pointer-events-none absolute left-1.5 top-1.5 flex items-center gap-1 bg-black/70 px-1 py-[1px]">
-          {(camera.media.kind === 'hls' || camera.media.kind === 'mjpeg') && (
+          {(media.kind === 'hls' || media.kind === 'mjpeg') && (
             <span className="h-1 w-1 rounded-full bg-[var(--alert-red)] animate-pulse" />
           )}
-          <span className="font-mono text-[7px] tracking-[0.18em] text-white/75">{previewLabel(camera.media.kind)}</span>
+          <span className="font-mono text-[7px] tracking-[0.18em] text-white/75">{previewLabel(media.kind)}</span>
         </div>
 
         {/* Hover only: the tile is already a button, this says what it opens. */}
