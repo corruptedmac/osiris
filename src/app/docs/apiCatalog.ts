@@ -282,6 +282,16 @@ export const API_GROUPS: ApiGroup[] = [
         returns: ['cameras', 'regions', 'total', 'timestamp'],
       },
       {
+        path: '/api/cctv/drivetexas-sync',
+        method: 'GET',
+        summary: 'The DriveTexas (Dallas) camera catalogue as a snapshot + watermark sync: render from the snapshot, then poll with the watermark for deltas.',
+        params: [
+          { name: 'since', desc: 'Watermark from a previous response. Current watermark → a no-change answer; previous watermark → a delta (added/changed/removed); anything older → a full snapshot.', example: 'dt1.0123abcd.4.9f2c…' },
+        ],
+        returns: ['mode', 'watermark', 'total', 'cameras (snapshot)', 'added/changed/removed (delta)'],
+        notes: 'Entries carry identity, geometry and labels only — never a stream address. DriveTexas playlist URLs expire minutes after minting and are resolved at open time via /api/cctv/resolve-stream.',
+      },
+      {
         path: '/api/cctv/stream-status',
         method: 'GET',
         summary: 'Probes whether a camera stream is reachable before the player commits to it.',

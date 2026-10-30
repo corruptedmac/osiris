@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Layers, BarChart3, Newspaper, Search, X, Globe, MapPinned, Route, Radar, Satellite, Moon, ExternalLink, AlertTriangle, Activity, Database, Wifi, Play, Network, Crosshair, Bluetooth, Pentagon, Radio , PenLine, Orbit } from 'lucide-react';
 import { type TerrainStatus } from '@/lib/map-terrain';
 import { loadCameraCatalog, mergeCameraCatalog } from '@/lib/camera-catalog';
+import { applyDriveTexasDelta, applyDriveTexasSnapshot, loadDriveTexasSync } from '@/lib/drivetexas-sync';
 import IntelFeed from '@/components/IntelFeed';
 import MarketsPanel from '@/components/MarketsPanel';
 import ScmPanel from '@/components/ScmPanel';
@@ -1040,7 +1041,7 @@ export default function Dashboard() {
   const layerFetchedRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!activeLayers.cctv) return;
-    return loadCameraCatalog(cameras => {
+    const stopCatalog = loadCameraCatalog(cameras => {
       dataRef.current = {
         ...dataRef.current,
         cameras: mergeCameraCatalog(dataRef.current.cameras ?? [], cameras),
@@ -1048,6 +1049,28 @@ export default function Dashboard() {
       setDataVersion(value => value + 1);
       setBackendStatus('connected');
     }, () => console.warn('[OSIRIS] Camera catalogue load failed; bounded retry scheduled'));
+    /* DriveTexas renders from its own snapshot instead of waiting on the
+       whole-world catalogue above, then stays current by watermark delta
+       (lib/drivetexas-sync). The two loads merge into the same state by
+       camera id; neither waits for the other. */
+    const stopDriveTexasSync = loadDriveTexasSync({
+      onSnapshot: cameras => {
+        dataRef.current = {
+          ...dataRef.current,
+          cameras: applyDriveTexasSnapshot(dataRef.current.cameras ?? [], cameras),
+        };
+        setDataVersion(value => value + 1);
+        setBackendStatus('connected');
+      },
+      onDelta: delta => {
+        dataRef.current = {
+          ...dataRef.current,
+          cameras: applyDriveTexasDelta(dataRef.current.cameras ?? [], delta),
+        };
+        setDataVersion(value => value + 1);
+      },
+    });
+    return () => { stopCatalog(); stopDriveTexasSync(); };
   }, [activeLayers.cctv]);
 
   useEffect(() => {
